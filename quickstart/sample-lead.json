@@ -1,0 +1,12 @@
+{
+  "name": "Sarah Ahmed",
+  "email": "sarah@brightdental.example",
+  "phone": "+1 415 555 0142",
+  "company": "Bright Dental",
+  "service": "Website redesign with online booking",
+  "message": "We need a new site with appointment booking before our second location opens next month. Budget is flexible.",
+  "budget": "$5,000-$10,000",
+  "urgency": "this month",
+  "city": "San Francisco",
+  "state": "CA"
+}

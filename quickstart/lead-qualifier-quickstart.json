@@ -1,0 +1,232 @@
+{
+  "name": "AI Lead Qualifier",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-qualifier",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "n1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "lead-qualifier-quickstart"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst b = item.body || item;\nconst clean = v => (v === undefined || v === null || String(v).trim() === '') ? null : String(v).trim();\n\nconst lead = {\n  email: clean(b.email || b.Email),\n  phone: clean(b.phone || b.mobile || b.telephone),\n  full_name: clean(b.name || b.full_name || `${b.first_name || ''} ${b.last_name || ''}`),\n  company: clean(b.company || b.business),\n  service_requested: clean(b.service || b.service_requested || b.interest),\n  message: clean(b.message || b.comments || b.notes),\n  budget_range: clean(b.budget || b.budget_range),\n  urgency: clean(b.urgency || b.timeline),\n  city: clean(b.city),\n  state: clean(b.state),\n  source: clean(b.source) || 'website_form',\n  received_at: new Date().toISOString()\n};\n\nif (!lead.email && !lead.phone) {\n  throw new Error('Lead needs at least an email or a phone number');\n}\n\nconst system = `You are a lead qualification AI for a service business.\nScore each lead from 0 to 100 using: contact info completeness (20), service intent clarity (25), urgency (20), budget (15), message quality (20).\nScore 0-10 for spam or test data (fake emails, \"Test User\", lottery/inheritance messages).\nRespond with valid JSON only, no markdown, in this exact shape:\n{\"score\": <0-100>, \"status\": \"<qualified|needs_followup|unqualified>\", \"reasoning\": \"<2-3 sentences>\", \"key_signals\": [\"...\"], \"recommended_action\": \"<immediate_call|email_followup|nurture_sequence|disqualify>\", \"missing_info\": [\"...\"]}\nRules: score>=60 qualified, 30-59 needs_followup, <30 unqualified. score>=80 immediate_call, >=60 email_followup, >=30 nurture_sequence, <30 disqualify.`;\n\nconst na = v => v || 'Not provided';\nconst prompt = `Analyze this lead:\nEMAIL: ${na(lead.email)}\nPHONE: ${na(lead.phone)}\nNAME: ${na(lead.full_name)}\nCOMPANY: ${na(lead.company)}\nSERVICE REQUESTED: ${na(lead.service_requested)}\nMESSAGE: ${na(lead.message)}\nBUDGET: ${na(lead.budget_range)}\nURGENCY: ${na(lead.urgency)}\nLOCATION: ${na(lead.city)}, ${na(lead.state)}\nSOURCE: ${na(lead.source)}`;\n\nreturn [{ json: { lead, system, prompt } }];"
+      },
+      "id": "n2",
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'claude-sonnet-5-5', max_tokens: 1024, system: $json.system, messages: [{ role: 'user', content: $json.prompt }] }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "n3",
+      "name": "Claude Qualify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Anthropic API Key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Normalize Lead').first().json.lead;\nconst response = $input.first().json;\nconst text = (response.content && response.content[0] && response.content[0].text) || '';\n\nlet q = null;\ntry { q = JSON.parse(text); } catch (e) {\n  const m = text.match(/\\{[\\s\\S]*\\}/);\n  if (m) { try { q = JSON.parse(m[0]); } catch (e2) {} }\n}\n\nif (!q || typeof q.score !== 'number') {\n  q = {\n    score: 0,\n    reasoning: 'Qualification failed - manual review required',\n    key_signals: [],\n    missing_info: []\n  };\n  q.parse_failed = true;\n}\n\nconst score = Math.max(0, Math.min(100, Math.round(q.score)));\nconst status = q.parse_failed ? 'needs_followup'\n  : score >= 60 ? 'qualified' : score >= 30 ? 'needs_followup' : 'unqualified';\nconst action = q.parse_failed ? 'email_followup'\n  : score >= 80 ? 'immediate_call' : score >= 60 ? 'email_followup'\n  : score >= 30 ? 'nurture_sequence' : 'disqualify';\n\nreturn [{ json: {\n  success: true,\n  lead,\n  qualification: {\n    score,\n    status,\n    recommended_action: action,\n    reasoning: q.reasoning || '',\n    key_signals: Array.isArray(q.key_signals) ? q.key_signals : [],\n    missing_info: Array.isArray(q.missing_info) ? q.missing_info : []\n  }\n} }];"
+      },
+      "id": "n4",
+      "name": "Parse Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.qualification.score }}",
+              "rightValue": 60,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n5",
+      "name": "Qualified?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "REPLACE_WITH_YOUR_SLACK_WEBHOOK_URL",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: ':fire: *' + $json.qualification.status + '* lead (score ' + $json.qualification.score + ')\\n' + ($json.lead.full_name || $json.lead.email) + ' - ' + ($json.lead.service_requested || 'no service given') + '\\n' + $json.qualification.reasoning }) }}",
+        "options": {}
+      },
+      "id": "n6",
+      "name": "Slack Alert (optional)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        -100
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Parse Result').first().json) }}",
+        "options": {}
+      },
+      "id": "n7",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          {
+            "node": "Claude Qualify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude Qualify": {
+      "main": [
+        [
+          {
+            "node": "Parse Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Result": {
+      "main": [
+        [
+          {
+            "node": "Qualified?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qualified?": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert (optional)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Alert (optional)": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
